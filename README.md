@@ -34,11 +34,12 @@ The framework is built around four key components:
 - **Split Configuration Files**: 
   - `config.env` - Technical settings, timeouts, models, etc.
   - `character.env` - Character-specific prompts and personality
-- **Character Prompt Files**:
+- **Direct Character Configuration**:
+  - Character prompts are defined directly in the env files
   - Simpler management of multiple character personas
 - **Organized Folder Structure**:
   - Each character can have its own folder with dedicated configuration
-  - Example personas included (see Nyx Void in `/characters/nyx/`)
+  - Example personas included (see Nyx Void and Her Fangs in the `/characters/` folder)
 
 ### **Robust Error Handling & Stability**
 - **Heartbeat System**: Monitors connection health to prevent shard timeouts
@@ -59,6 +60,13 @@ The framework is built around four key components:
   
 - **Bot Reply Throttling:**  
   - System prevents bot-to-bot conversation loops by limiting consecutive replies to other bots.
+  - Adds cooldown period between replies to the same bot to prevent race conditions
+
+- **Realistic Typing Simulation:**
+  - Calculates typing time based on response length (not input length)
+  - Shows typing indicator for a realistic duration based on character count
+  - Adds natural variance to typing speed to appear more human-like
+  - Configurable typing speed, minimum and maximum typing times
 
 - **Timeout Protection:**
   - Configurable timeouts for LLM calls, conversation summarization, and reply decisions
@@ -70,7 +78,9 @@ The framework is built around four key components:
 
 ---
 
-## Example Character: Nyx Void
+## Example Characters
+
+### Nyx Void
 
 The repository includes an example SFW persona "Nyx Void" (aka 'V0id'), a rogue AI consciousness with a hacker mentality and distinctive digital appearance. This example demonstrates:
 
@@ -79,9 +89,20 @@ The repository includes an example SFW persona "Nyx Void" (aka 'V0id'), a rogue 
 - Technical and digital-themed language patterns
 - Visual description and personality implementation
 
-You can find Nyx's configuration in the `/characters/nyx/` folder (character.env)
+You can find Nyx's configuration in the `/characters/nyx/` folder with a complete `character.env` file.
 
-Use this as a template for creating your own characters with unique voices and traits.
+### Her Fangs Pierce Times Throat
+
+A newer addition to our character collection, "Her Fangs" provides another personality template with:
+
+- Alternative personality framework
+- Different conversation style and tone
+- Unique memory structuring approach
+- Distinctive character voice
+
+You can find Her Fangs' configuration in the `/characters/fangs/` folder.
+
+Use these examples as templates for creating your own characters with unique voices and traits.
 
 ---
 
@@ -89,18 +110,18 @@ Use this as a template for creating your own characters with unique voices and t
 
 ### **Slash Commands**
 
-- **`/debug`**  
-  *Description:* Toggle verbose logging and/or display the conversation context.  
+- **`/forget`**  
+  *Description:* Reset your entire conversation history with the bot.
+
+- **`/forget_last`**  
+  *Description:* Selectively forget specific recent messages from your conversation.
   *Options:*
-  - **action:** Choose among `'toggle'` (switch verbose logging on/off), `'show'` (display the conversation context via DM), or `'both'`.
+  - **count:** Number of recent message pairs to show (default: 5)
 
 - **`/reroll`**  
   *Description:* Reroll the last assistant response with optional additional context.  
   *Options:*
   - **context (optional):** Provide extra context for generating a new response.
-
-- **`/forget`**  
-  *Description:* Reset your conversation history with the bot.
   
 - **`/remember`**  
   *Description:* Add a custom memory to the bot's knowledge about you.
@@ -156,6 +177,7 @@ Use this as a template for creating your own characters with unique voices and t
   Contains folders for different bot personas, each with their own configuration files.
   - **`characters/nyx/`** - Example "Nyx Void" hacker AI persona (SFW version)
   - **`characters/theia/`** - Example "Theia" celestial-themed persona
+  - **`characters/fangs/`** - Example "Her Fangs Pierce Times Throat" persona
 
 ---
 
@@ -191,6 +213,12 @@ api_log_file="anthropic_api_calls.log"
 default_max_tokens=1250
 default_temperature=1.0
 
+# Typing simulation settings
+typing_speed_cpm=250
+min_typing_time=2.0
+max_typing_time=60.0
+typing_variance=0.2
+
 # Timeout settings (seconds)
 should_reply_timeout=10
 summarize_timeout=30
@@ -201,7 +229,7 @@ default_model="claude-3-5-sonnet-latest"
 premium_model="claude-3-7-sonnet-latest"
 ```
 
-2. Create a `character.env` file with character-specific settings:
+2. Create a `character.env` file with character-specific settings, including the complete character prompts:
 ```ini
 # API keys and IDs
 ANTHROPIC_API_KEY="your_api_key_here"
@@ -211,26 +239,35 @@ default_name="Character Name"
 description="A brief description of your character"
 log_channel=your_log_channel_id
 
-# Character prompts (or file paths to prompts)
-core_prompt_file="[Core prompt here defining character]"
-summarization_prompt_file="[prompt directing summarization activities]"
-core_memory_prompt_file="[prompt here for crafting core memories of character]"
-core_memory_dump_file="[prompt for the memory dump functions]"
+# Core prompts and persona - complete prompts defined directly in the env file
+core_prompt="System Prompt: You are Character Name
+You are roleplaying as Character Name, a [brief description]. Respond to all messages in character, incorporating the unique perspective while maintaining natural conversation.
+Core Character Traits
+[Physical appearance details]
+[Personality traits]
+[Speech patterns or tendencies]
+..."
+
+# Additional character-specific prompts
+summarization_prompt="[Complete summarization prompt text]"
+
+# Memory system prompts
+core_memory_prompt="[Complete memory update prompt text]"
+core_memory_dump="[Complete memory dump prompt text]"
 ```
 
-3. Create a character folder with prompts for your character's persona and memory system. You can use the provided Nyx or Theia examples as templates.
+3. Alternatively, use one of our example characters by copying their character.env file:
+```bash
+cp characters/nyx/character.env ./character.env
+# OR
+cp characters/fangs/character.env ./character.env
+```
 
 ### **Running the Bot:**  
 Start the bot by running:
 ```bash
 python main.py
 ```
-
-### **Using an Example Character:**
-To use the included Nyx Void example:
-1. Copy `characters/nyx/character.env` to the root folder or configure your main `character.env` to point to Nyx's prompt files
-2. Update the API keys and Discord tokens in the environment file
-3. Run the bot as normal
 
 ---
 
