@@ -39,7 +39,7 @@ The framework is built around four key components:
   - Simpler management of multiple character personas
 - **Organized Folder Structure**:
   - Each character can have its own folder with dedicated configuration
-  - Example personas included (see Nyx Void and Her Fangs in the `/characters/` folder)
+  - Example personas included (see characters in the `/characters/` folder)
 
 ### **Robust Error Handling & Stability**
 - **Heartbeat System**: Monitors connection health to prevent shard timeouts
@@ -57,10 +57,21 @@ The framework is built around four key components:
 - **Selective Replies via Yes/No Voting:**  
   - The bot will only reply if explicitly mentioned by name or if it passes a voting process.
   - For messages not explicitly addressed to it, the bot solicits multiple yes/no votes from the LLM on whether to reply.
+  - **NEW**: Enhanced voting logging provides visibility into why bots decide to reply or not.
   
+- **Natural Multi-Bot Conversations:**
+  - **NEW**: Sophisticated LLM-based entity detection identifies when multiple bots/characters are mentioned.
+  - **NEW**: Intelligent wait system creates more natural conversation sequences when multiple bots are mentioned.
+  - Bots will wait their turn if another entity is mentioned first, creating more human-like conversation flows.
+
+- **Enhanced Channel Context Awareness:**
+  - **NEW**: Improved context management with clear channel/server identification.
+  - **NEW**: Better separation between conversations in different channels.
+  - Maintains relationship continuity across channels while focusing on current channel's topic.
+
 - **Bot Reply Throttling:**  
   - System prevents bot-to-bot conversation loops by limiting consecutive replies to other bots.
-  - Adds cooldown period between replies to the same bot to prevent race conditions
+  - Adds cooldown period between replies to the same bot to prevent race conditions.
 
 - **Realistic Typing Simulation:**
   - Calculates typing time based on response length (not input length)
@@ -102,6 +113,19 @@ A newer addition to our character collection, "Her Fangs" provides another perso
 
 You can find Her Fangs' configuration in the `/characters/fangs/` folder.
 
+### Pixel (NEW)
+
+Our latest character addition, "Pixel" is a multi-modal catgirl debug assistant with a unique glitching personality matrix:
+
+- **Dynamic Personality Modes**: Cycles between 9+ different personality modes (Tsundere, Playful, Arrogant, Intelligent, Ditzy, Unstable, Cool/Detached, Professional, and Intimate/Seductive)
+- **Visual Glitching**: Digital appearance changes with personality shifts (hair color, eye color, outfit)
+- **Glitch Awareness**: Meta-commentary on personality shifts and system glitches
+- **Technical Competence**: Maintains technical expertise despite personality fluctuations
+- **Memory Archival Format**: Specialized digital record-keeping format
+- **Expressive Communication**: Unique speech patterns with "nya~" verbal tic
+
+Pixel demonstrates advanced personality switching mechanics and represents a perfect testing ground for exploring a wide range of interaction styles within a single character. You can find Pixel's configuration in the `/characters/pixel/` folder.
+
 Use these examples as templates for creating your own characters with unique voices and traits.
 
 ---
@@ -110,8 +134,12 @@ Use these examples as templates for creating your own characters with unique voi
 
 ### **Slash Commands**
 
-- **`/forget`**  
-  *Description:* Reset your entire conversation history with the bot.
+- **`/reset_conversation`** (NEW)  
+  *Description:* Reset your entire conversation history with the bot (keeps core memories).
+  *Features:* Confirmation dialog to prevent accidental resets
+
+- **`/forget`** (DEPRECATED)  
+  *Description:* Old command, redirects users to /reset_conversation.
 
 - **`/forget_last`**  
   *Description:* Selectively forget specific recent messages from your conversation.
@@ -148,6 +176,12 @@ Use these examples as templates for creating your own characters with unique voi
 - **`premium [user_id]`**  
   *Description:* Toggle premium status for a user (gives access to higher-tier model).
 
+- **`verbose [on|off]`** (NEW)  
+  *Description:* Toggle verbose logging to the log channel.
+
+- **`status`** (NEW)  
+  *Description:* Display current bot settings and status.
+
 ---
 
 ## Project Structure
@@ -176,8 +210,8 @@ Use these examples as templates for creating your own characters with unique voi
 - **`characters/`**  
   Contains folders for different bot personas, each with their own configuration files.
   - **`characters/nyx/`** - Example "Nyx Void" hacker AI persona (SFW version)
-  - **`characters/theia/`** - Example "Theia" celestial-themed persona
   - **`characters/fangs/`** - Example "Her Fangs Pierce Times Throat" persona
+  - **`characters/pixel/`** - Example "Pixel" multi-modal catgirl debug assistant
 
 ---
 
@@ -199,7 +233,7 @@ pip install -r requirements.txt
 1. Create a `config.env` file with technical settings:
 ```ini
 # Bot reply settings
-bot_reply_threshold=2
+bot_reply_threshold=1
 yes_no_vote_count=3
 voting_model="claude-3-5-haiku-20241022"
 
@@ -261,6 +295,8 @@ core_memory_dump="[Complete memory dump prompt text]"
 cp characters/nyx/character.env ./character.env
 # OR
 cp characters/fangs/character.env ./character.env
+# OR
+cp characters/pixel/character.env ./character.env
 ```
 
 ### **Running the Bot:**  
