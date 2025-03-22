@@ -259,18 +259,37 @@ class ForgetLastView(View):
 
 def setup_commands(bot: commands.Bot, user_data: dict):
     
-    @bot.tree.command(name="forget", description="Reset your conversation history with the bot.")
-    async def forget(interaction: discord.Interaction):
+    @bot.tree.command(name="reset_conversation", description="Reset your entire conversation history with the bot (keeps core memories).")
+    async def reset_conversation(interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         if user_id not in user_data:
             await interaction.response.send_message("No conversation history found.", ephemeral=True)
             return
-
-        # Keep core memories but clear conversation history
-        user_data[user_id]["conversation_history"] = []
+        # Create confirmation buttons
+        class ConfirmView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=30)  # 30 second timeout
+            @discord.ui.button(label="Yes, Reset Everything", style=discord.ButtonStyle.danger)
+            async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                # Keep core memories but clear conversation history
+                user_data[user_id]["conversation_history"] = []
+                await interaction.response.send_message(
+                    "✅ Your conversation history has been reset. Core memories remain intact.", ephemeral=True)
+                self.stop()
+                
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+            async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await interaction.response.send_message("Operation cancelled. Your conversation history remains intact.", ephemeral=True)
+                self.stop()
+              
+        # Send confirmation message
         await interaction.response.send_message(
-            "Your conversation history has been reset. Core memories remain intact.", ephemeral=True)
-
+            "⚠️ **Are you sure?** This will permanently delete your entire conversation history with me.\n"
+            "Note: Your core memories will be preserved.", 
+            view=ConfirmView(),
+            ephemeral=True
+        )
+    
     @bot.tree.command(name="forget_last", description="Forget specific recent messages from your conversation.")
     @app_commands.describe(count="Number of recent message pairs to show (default: 5)")
     async def forget_last(interaction: discord.Interaction, count: int = 5):
