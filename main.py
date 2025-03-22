@@ -1110,9 +1110,6 @@ async def on_ready():
             "`premium [user_id]` - Toggle premium status for a user\n"
             "`list users` - List all users with basic stats\n\n"
             
-            "**Debug Commands:**\n"
-            "`!synccommands` - Manually sync slash commands (admin only)\n\n"
-            
             f"**Logging Features:**\n"
             "• Entity detection logs - Track multi-bot conversation coordination\n"
             "• Voting logs - See why the bot decides to reply or not\n"
