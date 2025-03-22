@@ -523,21 +523,21 @@ async def process_admin_commands(message: discord.Message):
         return
 
     # Add toggle for verbose logging
-elif cmd == "verbose" and len(split) > 1:
-    toggle = split[1].lower()
-    if toggle in ["on", "true", "1", "enable", "yes"]:
-        # We need to modify the global VERBOSE_LOGGING
-        import config
-        config.VERBOSE_LOGGING = True
-        await log_channel.send(f"Verbose logging has been **enabled**. Terminal logs will now be sent to this channel.")
-        log_info("Verbose logging enabled by admin command")
-    elif toggle in ["off", "false", "0", "disable", "no"]:
-        import config
-        config.VERBOSE_LOGGING = False
-        await log_channel.send(f"Verbose logging has been **disabled**. Terminal logs will no longer be sent to this channel.")
-        log_info("Verbose logging disabled by admin command")
-    else:
-        await log_channel.send(f"Invalid verbose logging setting. Use: verbose [on|off]")
+    elif cmd == "verbose" and len(split) > 1:
+        toggle = split[1].lower()
+        if toggle in ["on", "true", "1", "enable", "yes"]:
+            # We need to modify the global VERBOSE_LOGGING
+            import config
+            config.VERBOSE_LOGGING = True
+            await log_channel.send(f"Verbose logging has been **enabled**. Terminal logs will now be sent to this channel.")
+            log_info("Verbose logging enabled by admin command")
+        elif toggle in ["off", "false", "0", "disable", "no"]:
+            import config
+            config.VERBOSE_LOGGING = False
+            await log_channel.send(f"Verbose logging has been **disabled**. Terminal logs will no longer be sent to this channel.")
+            log_info("Verbose logging disabled by admin command")
+        else:
+            await log_channel.send(f"Invalid verbose logging setting. Use: verbose [on|off]")
         
 # Add status command to check current settings
 elif cmd == "status":
