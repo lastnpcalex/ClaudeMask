@@ -68,12 +68,31 @@ async def get_yes_no_votes(message, is_bot=False, vote_count=3):
     """
     bot_name = DEFAULT_NAME  # from config
     penalty_text = ""
+    author_name = message.author.name
+    channel_name = getattr(message.channel, 'name', 'DM')
+    guild_name = getattr(message.guild, 'name', 'DM') if message.guild else 'DM'
+    
+    # Create channel context for logging
+    channel_context_str = f"in #{channel_name}" if not isinstance(message.channel, discord.DMChannel) else "in DM"
+    if hasattr(message.guild, 'name') and message.guild:
+        channel_context_str += f" ({guild_name})"
+    
     if is_bot:
         async with bot_reply_lock:
             count = bot_reply_counts.get(message.author.id, 0)
         penalty_text = f" Note: this message is from a bot and you have already received {count} replies from me."
-    prompt = f"{bot_name}, respond with a simple yes/no: would you like to reply to this message?{penalty_text}"
+    
+    # Create a more detailed prompt
+    prompt = (
+        f"You are {bot_name}. Please respond with a simple yes/no: would you like to reply to this message from "
+        f"{author_name} {channel_context_str}? Consider if the message seems to be directed at you or if "
+        f"it would be natural for you to respond in this conversation.{penalty_text} "
+        f"Respond with ONLY 'yes' or 'no'."
+    )
 
+    # Log that we're starting voting
+    log_info(f"Starting vote for message from {author_name} {channel_context_str}: '{message.clean_content[:50]}...'")
+    
     votes = []
     dummy_user_dict = {
         "system_vote": {
@@ -85,24 +104,65 @@ async def get_yes_no_votes(message, is_bot=False, vote_count=3):
         }
     }
 
-    for _ in range(vote_count):
-        response = await call_claude(
-            user_id="system_vote",          # system-level; not tied to a persistent user
-            user_dict=dummy_user_dict,       # dummy conversation history
-            model="claude-3-5-haiku-20241022",
-            system_prompt=prompt,
-            user_content=message.clean_content,  # pass the message as a user message
-            temperature=1.0,
-            max_tokens=5,
-            verbose=False
-        )
-        vote_raw = response.choices[0].message["content"].strip().lower()
-        if "yes" in vote_raw:
-            votes.append("yes")
-        elif "no" in vote_raw:
-            votes.append("no")
-        else:
-            votes.append("abstain")
+    for i in range(vote_count):
+        try:
+            response = await call_claude(
+                user_id="system_vote",          # system-level; not tied to a persistent user
+                user_dict=dummy_user_dict,       # dummy conversation history
+                model="claude-3-5-haiku-20241022",
+                system_prompt=prompt,
+                user_content=message.clean_content,  # pass the message as a user message
+                temperature=1.0,
+                max_tokens=5,
+                verbose=False
+            )
+            vote_raw = response.choices[0].message["content"].strip().lower()
+            
+            # Log the raw vote
+            log_info(f"Vote {i+1} raw response: '{vote_raw}'")
+            
+            if "yes" in vote_raw:
+                votes.append("yes")
+            elif "no" in vote_raw:
+                votes.append("no")
+            else:
+                votes.append("abstain")
+                
+        except Exception as e:
+            log_error(f"Error in vote {i+1}: {e}")
+            votes.append("abstain")  # Count errors as abstentions
+
+    # Log the voting results
+    yes_votes = votes.count("yes")
+    no_votes = votes.count("no")
+    abstain_votes = votes.count("abstain")
+    
+    final_decision = yes_votes > no_votes and yes_votes > abstain_votes
+    
+    log_result = (
+        f"Voting results for message from {author_name} {channel_context_str}: "
+        f"Yes: {yes_votes}, No: {no_votes}, Abstain: {abstain_votes}, "
+        f"Decision: {'REPLY' if final_decision else 'IGNORE'}"
+    )
+    
+    log_info(log_result)
+    
+    # If VERBOSE_LOGGING is enabled, send this to the log channel
+    if VERBOSE_LOGGING and log_channel:
+        try:
+            # Truncate the message if it's too long
+            truncated_msg = message.clean_content[:200] + "..." if len(message.clean_content) > 200 else message.clean_content
+            channel_msg = (
+                f"📊 **Vote Results**\n"
+                f"Message from: {author_name} {channel_context_str}\n"
+                f"Message: `{truncated_msg}`\n"
+                f"Votes: Yes: {yes_votes}, No: {no_votes}, Abstain: {abstain_votes}\n"
+                f"Decision: {'✅ REPLY' if final_decision else '❌ IGNORE'}"
+            )
+            await log_channel.send(channel_msg)
+        except Exception as e:
+            log_error(f"Failed to send vote results to log channel: {e}")
+    
     return votes
 
 async def should_reply(message):
@@ -462,6 +522,40 @@ async def process_admin_commands(message: discord.Message):
             await log_channel.send("Usage: premium [user_id]")
         return
 
+    # Add toggle for verbose logging
+elif cmd == "verbose" and len(split) > 1:
+    toggle = split[1].lower()
+    if toggle in ["on", "true", "1", "enable", "yes"]:
+        # We need to modify the global VERBOSE_LOGGING
+        import config
+        config.VERBOSE_LOGGING = True
+        await log_channel.send(f"Verbose logging has been **enabled**. Terminal logs will now be sent to this channel.")
+        log_info("Verbose logging enabled by admin command")
+    elif toggle in ["off", "false", "0", "disable", "no"]:
+        import config
+        config.VERBOSE_LOGGING = False
+        await log_channel.send(f"Verbose logging has been **disabled**. Terminal logs will no longer be sent to this channel.")
+        log_info("Verbose logging disabled by admin command")
+    else:
+        await log_channel.send(f"Invalid verbose logging setting. Use: verbose [on|off]")
+        
+# Add status command to check current settings
+elif cmd == "status":
+    import config
+    status_text = (
+        f"**Bot Status**\n"
+        f"• Name: {DEFAULT_NAME}\n"
+        f"• Default Model: {DEFAULT_MODEL}\n"
+        f"• Premium Model: {PREMIUM_MODEL}\n"
+        f"• Reply Cooldown: {REPLY_COOLDOWN}s\n"
+        f"• Bot Reply Threshold: {BOT_REPLY_THRESHOLD}\n"
+        f"• Verbose Logging: {'Enabled' if config.VERBOSE_LOGGING else 'Disabled'}\n"
+        f"• Users in DB: {len(user_data)}\n"
+        f"• Uptime: {(time.time() - bot.uptime) if hasattr(bot, 'uptime') else 'Unknown':.1f}s"
+    )
+    await log_channel.send(status_text)
+        
+
 # message processing as separate async function
 async def process_message(message: discord.Message):
     try:
@@ -601,6 +695,8 @@ async def process_message(message: discord.Message):
 
 
 # Extract core message processing logic
+# Modify how we build system prompt in process_user_message function
+
 async def process_user_message(message, content):
     user_id = str(message.author.id)
     if user_id not in user_data:
@@ -623,29 +719,67 @@ async def process_user_message(message, content):
     # Append the user message to the conversation history
     user_data[user_id]["conversation_history"].append({"role": "user", "content": content})
     
-    # Build the system prompt.
+    # ===== ENHANCED CONTEXT BUILDING =====
     core_mem = user_data[user_id].get("core_memories", "")
+    
+    # Get current channel info
+    current_channel_id = str(message.channel.id)
+    current_channel_name = getattr(message.channel, 'name', 'Direct Message')
+    current_guild_name = getattr(message.guild, 'name', 'DM') if message.guild else 'Direct Message'
+    
+    # Determine channel type and build appropriate context
     if isinstance(message.channel, discord.DMChannel):
-        extra_context = "This is a private conversation. You may be casual, personal, and more intimate."
+        channel_context_header = "This is a private conversation. You may be casual, personal, and more intimate."
         external_context = ""
+        channel_metadata = "[Private DM]"
     else:
-        extra_context = ("This is a public channel. Be yourself, but the conversation is public; "
-                         "be aware not to carry over private conversation topics unless you want everyone to know about them.")
-        # Build external context from the channel context.
+        channel_context_header = (
+            f"This is a public channel '#{current_channel_name}' in server '{current_guild_name}'. "
+            f"Be yourself, but remember this is a public conversation visible to everyone in the channel. "
+            f"Adapt your tone to fit the channel's purpose while maintaining consistent personality."
+        )
+        
+        # Build external context from the current channel context
         context_lines = []
+        channel_metadata = f"[#{current_channel_name} in {current_guild_name}]"
+        
+        # Add a header for the current channel context
+        context_lines.append(f"--- Recent messages in {channel_metadata} ---")
+        
+        # Add the current channel's messages with rich metadata
         for msg in channel_context.get(message.channel.id, []):
-            if msg["content"]:
-                context_lines.append(f"{msg['author']}: {msg['content']}")
+            if msg.get("content"):
+                # Format with author and timestamp
+                timestamp = msg.get("timestamp", "")
+                timestamp_str = f" at {timestamp}" if timestamp else ""
+                
+                # Include roles if available
+                roles = msg.get("roles", "")
+                roles_str = f" ({roles})" if roles else ""
+                
+                context_lines.append(f"{msg['author']}{roles_str}{timestamp_str}: {msg['content']}")
+        
+        # End the current channel context section
+        context_lines.append(f"--- End of recent messages in {channel_metadata} ---")
+        
+        # Add context aware note to help with cross-channel awareness
+        context_lines.append(
+            "\nNote: Maintain relationship continuity from previous conversations with this user, "
+            "but focus primarily on the current channel's topic and conversation flow."
+        )
+        
         external_context = "\n".join(context_lines)
     
-    system_text = f"{extra_context}\n"
+    # Build the system prompt
+    system_text = f"{channel_context_header}\n"
     if external_context:
         system_text += f"External Context:\n{external_context}\n"
     system_text += f"{CORE_PROMPT}\n\nCore Memories:\n{core_mem}"
     
-    # Choose the appropriate model.
+    # Choose the appropriate model
     model_to_use = PREMIUM_MODEL if user_data[user_id].get("premium", False) else DEFAULT_MODEL
     
+    # Rest of the function remains the same...
     # Make API call with typing indicator
     typing_task = None
     try:
@@ -672,7 +806,6 @@ async def process_user_message(message, content):
 
         # Record that we replied to this bot if it's a bot message
         if message.author.bot:
-            channel_id = str(message.channel.id)
             channel_id = str(message.channel.id)
             author_id = str(message.author.id)
         
