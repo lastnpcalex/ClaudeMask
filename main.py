@@ -539,21 +539,21 @@ async def process_admin_commands(message: discord.Message):
         else:
             await log_channel.send(f"Invalid verbose logging setting. Use: verbose [on|off]")
         
-# Add status command to check current settings
-elif cmd == "status":
-    import config
-    status_text = (
-        f"**Bot Status**\n"
-        f"• Name: {DEFAULT_NAME}\n"
-        f"• Default Model: {DEFAULT_MODEL}\n"
-        f"• Premium Model: {PREMIUM_MODEL}\n"
-        f"• Reply Cooldown: {REPLY_COOLDOWN}s\n"
-        f"• Bot Reply Threshold: {BOT_REPLY_THRESHOLD}\n"
-        f"• Verbose Logging: {'Enabled' if config.VERBOSE_LOGGING else 'Disabled'}\n"
-        f"• Users in DB: {len(user_data)}\n"
-        f"• Uptime: {(time.time() - bot.uptime) if hasattr(bot, 'uptime') else 'Unknown':.1f}s"
-    )
-    await log_channel.send(status_text)
+    # Add status command to check current settings
+    elif cmd == "status":
+        import config
+        status_text = (
+            f"**Bot Status**\n"
+            f"• Name: {DEFAULT_NAME}\n"
+            f"• Default Model: {DEFAULT_MODEL}\n"
+            f"• Premium Model: {PREMIUM_MODEL}\n"
+            f"• Reply Cooldown: {REPLY_COOLDOWN}s\n"
+            f"• Bot Reply Threshold: {BOT_REPLY_THRESHOLD}\n"
+            f"• Verbose Logging: {'Enabled' if config.VERBOSE_LOGGING else 'Disabled'}\n"
+            f"• Users in DB: {len(user_data)}\n"
+            f"• Uptime: {(time.time() - bot.uptime) if hasattr(bot, 'uptime') else 'Unknown':.1f}s"
+        )
+        await log_channel.send(status_text)
         
 
 # message processing as separate async function
