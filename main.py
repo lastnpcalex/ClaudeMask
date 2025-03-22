@@ -725,94 +725,194 @@ async def process_message(message: discord.Message):
                     return  # Skip if we've replied too many times to this bot
                 bot_reply_counts[message.author.id] = count + 1
         
-        # Entity detection and waiting logic
-        should_wait = False
-        wait_time = 0
-        wait_reason = ""
+        # Enhanced entity detection section for process_message function
+
+# Entity detection and waiting logic
+should_wait = False
+wait_time = 0
+wait_reason = ""
+entity_detection_start = time.time()
+
+# Log that we're starting entity detection - respect VERBOSE_LOGGING
+channel_name = getattr(message.channel, 'name', 'DM')
+guild_name = getattr(message.guild, 'name', 'Unknown') if message.guild else 'DM'
+author_name = message.author.name
+log_msg = (
+    f"🔍 **Entity Detection Started**\n"
+    f"Message from: {author_name} in #{channel_name} ({guild_name})\n"
+    f"Content: ```{message.clean_content[:150]}```"
+)
+await send_to_log_channel(log_msg)  # Will respect VERBOSE_LOGGING setting
+
+# Only do entity detection for non-DM channels and substantive messages
+if not isinstance(message.channel, discord.DMChannel) and len(content) > 15:
+    try:
+        # Set a timeout for the entire entity detection process
+        references_others_first, first_entity, all_entities = await asyncio.wait_for(
+            detect_entities(message, DEFAULT_NAME),
+            timeout=4.0  # 4-second timeout for the entire detection process
+        )
         
-        # Only do entity detection for non-DM channels and substantive messages
-        if not isinstance(message.channel, discord.DMChannel) and len(content) > 15:
-            try:
-                # Set a timeout for the entire entity detection process
-                references_others_first, first_entity, all_entities = await asyncio.wait_for(
-                    detect_entities(message, DEFAULT_NAME),
-                    timeout=4.0  # 4-second timeout for the entire detection process
-                )
+        # Log the detection results
+        entity_detection_time = time.time() - entity_detection_start
+        if all_entities:
+            entities_str = ", ".join([f"'{e}'" for e in all_entities])
+            detection_result = (
+                f"🔍 **Entity Detection Results**\n"
+                f"Message ID: {message.id}\n"
+                f"Time taken: {entity_detection_time:.2f}s\n"
+                f"Entities found: {entities_str}\n"
+                f"Bot name appears: {'Yes' if DEFAULT_NAME.lower() in [e.lower() for e in all_entities] else 'No'}\n"
+                f"Other entity referenced first: {'Yes' if references_others_first else 'No'}\n"
+                f"First entity: {first_entity if first_entity else 'None'}"
+            )
+        else:
+            detection_result = (
+                f"🔍 **Entity Detection Results**\n"
+                f"Message ID: {message.id}\n"
+                f"Time taken: {entity_detection_time:.2f}s\n"
+                f"No entities detected"
+            )
+        
+        # Log detection results - respect VERBOSE_LOGGING
+        await send_to_log_channel(detection_result)
+        
+        if references_others_first and first_entity:
+            entity_list = ', '.join(all_entities)
+            wait_reason = f"Entities detected: {entity_list}, waiting for {first_entity}"
+            log_info(wait_reason)
+            
+            # Calculate wait time based on message length + randomness
+            # Base wait time: 3 seconds + 0.5 seconds per 20 characters
+            base_wait = 3.0 + (len(content) / 40)
+            
+            # Add randomness to prevent bots waiting the same time
+            variance = random.uniform(0.8, 1.2)
+            wait_time = base_wait * variance
+            
+            # Ensure reasonable bounds: 3-12 seconds
+            wait_time = min(max(wait_time, 3.0), 12.0)
+            
+            should_wait = True
+            
+            # Log the waiting decision - respect VERBOSE_LOGGING
+            wait_decision = (
+                f"⏱️ **Entity Wait Decision**\n"
+                f"Message ID: {message.id}\n"
+                f"Will wait: Yes\n"
+                f"Wait reason: {wait_reason}\n"
+                f"Wait time: {wait_time:.2f}s\n"
+                f"Base wait: {base_wait:.2f}s\n"
+                f"Variance applied: {variance:.2f}"
+            )
+            await send_to_log_channel(wait_decision)
+        else:
+            # Log that we're not waiting - respect VERBOSE_LOGGING
+            wait_decision = (
+                f"⏱️ **Entity Wait Decision**\n"
+                f"Message ID: {message.id}\n"
+                f"Will wait: No\n"
+                f"Reason: {'No entities detected' if not all_entities else 'Bot mentioned first or exclusively'}"
+            )
+            await send_to_log_channel(wait_decision)
+            
+    except asyncio.TimeoutError:
+        error_msg = "Entity detection timed out, continuing without waiting"
+        log_error(error_msg)
+        # Force error logs regardless of verbose setting
+        await send_to_log_channel(f"❌ **Entity Detection Error**\n{error_msg}", force=True)
+    except Exception as e:
+        error_msg = f"Error in entity detection: {e}"
+        log_error(error_msg)
+        # Force error logs regardless of verbose setting
+        await send_to_log_channel(f"❌ **Entity Detection Error**\n{error_msg}", force=True)
+        # Continue with processing even if entity detection fails
+
+# If we should wait for another entity to respond
+if should_wait and wait_time > 0:
+    log_info(f"Waiting {wait_time:.2f}s because: {wait_reason}")
+    wait_start_time = time.time()
+    
+    # Announce the wait start - respect VERBOSE_LOGGING
+    await send_to_log_channel(
+        f"⏳ **Starting Wait Period**\n"
+        f"Message ID: {message.id}\n"
+        f"Duration: {wait_time:.2f}s\n"
+        f"Waiting for: {first_entity}"
+    )
+    
+    # Keep typing indicator active during wait (makes delay appear natural)
+    typing_task = None
+    if not isinstance(message.channel, discord.DMChannel):
+        typing_task = asyncio.create_task(
+            extended_typing(message.channel, wait_time)
+        )
+    
+    # Wait for the calculated time
+    await asyncio.sleep(wait_time)
+    
+    # Cancel typing task if it's still running
+    if typing_task and not typing_task.done():
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
+    
+    # After waiting, update the channel context with any new messages
+    if hasattr(message.channel, 'id') and message.channel.id in channel_context:
+        try:
+            # Record pre-wait context length
+            pre_wait_context_length = len(channel_context.get(message.channel.id, []))
+            
+            # Collect new messages that arrived during our wait
+            recent_messages = []
+            async for msg in message.channel.history(limit=5):
+                # Only include messages that:
+                # 1. Aren't the original message we're responding to
+                # 2. Were created after the original message
+                # 3. Aren't from this bot
+                if (msg.id != message.id and 
+                    msg.created_at > message.created_at and
+                    msg.author.id != bot.user.id):
+                    
+                    clean_content = msg.clean_content.strip()
+                    if clean_content:
+                        recent_messages.append({
+                            "author": msg.author.name,
+                            "content": clean_content
+                        })
+            
+            # Add new messages to the context
+            if recent_messages:
+                channel_context[message.channel.id].extend(recent_messages)
+                # Keep within limit
+                channel_context[message.channel.id] = channel_context[message.channel.id][-10:]
                 
-                if references_others_first and first_entity:
-                    entity_list = ', '.join(all_entities)
-                    wait_reason = f"Entities detected: {entity_list}, waiting for {first_entity}"
-                    log_info(wait_reason)
-                    
-                    # Calculate wait time based on message length + randomness
-                    # Base wait time: 3 seconds + 0.5 seconds per 20 characters
-                    base_wait = 3.0 + (len(content) / 40)
-                    
-                    # Add randomness to prevent bots waiting the same time
-                    variance = random.uniform(0.8, 1.2)
-                    wait_time = base_wait * variance
-                    
-                    # Ensure reasonable bounds: 3-12 seconds
-                    wait_time = min(max(wait_time, 3.0), 12.0)
-                    
-                    should_wait = True
-            except asyncio.TimeoutError:
-                log_error("Entity detection timed out, continuing without waiting")
-            except Exception as e:
-                log_error(f"Error in entity detection: {e}")
-                # Continue with processing even if entity detection fails
-        
-        # If we should wait for another entity to respond
-        if should_wait and wait_time > 0:
-            log_info(f"Waiting {wait_time:.2f}s because: {wait_reason}")
-            
-            # Keep typing indicator active during wait (makes delay appear natural)
-            typing_task = None
-            if not isinstance(message.channel, discord.DMChannel):
-                typing_task = asyncio.create_task(
-                    extended_typing(message.channel, wait_time)
+                # Log what was added - respect VERBOSE_LOGGING
+                new_msg_details = "\n".join([f"- {msg['author']}: {msg['content'][:50]}..." for msg in recent_messages])
+                wait_result = (
+                    f"✅ **Wait Completed**\n"
+                    f"Message ID: {message.id}\n"
+                    f"Actual wait time: {time.time() - wait_start_time:.2f}s\n"
+                    f"New messages added: {len(recent_messages)}\n"
+                    f"New messages:\n{new_msg_details}"
+                )
+                log_info(f"Updated channel context with {len(recent_messages)} new messages after waiting")
+            else:
+                wait_result = (
+                    f"✅ **Wait Completed**\n"
+                    f"Message ID: {message.id}\n"
+                    f"Actual wait time: {time.time() - wait_start_time:.2f}s\n"
+                    f"No new messages detected during wait period"
                 )
             
-            # Wait for the calculated time
-            await asyncio.sleep(wait_time)
-            
-            # Cancel typing task if it's still running
-            if typing_task and not typing_task.done():
-                typing_task.cancel()
-                try:
-                    await typing_task
-                except asyncio.CancelledError:
-                    pass
-            
-            # After waiting, update the channel context with any new messages
-            if hasattr(message.channel, 'id') and message.channel.id in channel_context:
-                try:
-                    # Collect new messages that arrived during our wait
-                    recent_messages = []
-                    async for msg in message.channel.history(limit=5):
-                        # Only include messages that:
-                        # 1. Aren't the original message we're responding to
-                        # 2. Were created after the original message
-                        # 3. Aren't from this bot
-                        if (msg.id != message.id and 
-                            msg.created_at > message.created_at and
-                            msg.author.id != bot.user.id):
-                            
-                            clean_content = msg.clean_content.strip()
-                            if clean_content:
-                                recent_messages.append({
-                                    "author": msg.author.name,
-                                    "content": clean_content
-                                })
-                    
-                    # Add new messages to the context
-                    if recent_messages:
-                        channel_context[message.channel.id].extend(recent_messages)
-                        # Keep within limit
-                        channel_context[message.channel.id] = channel_context[message.channel.id][-10:]
-                        log_info(f"Updated channel context with {len(recent_messages)} new messages after waiting")
-                except Exception as e:
-                    log_error(f"Error updating channel context after waiting: {e}")
+            await send_to_log_channel(wait_result)
+        except Exception as e:
+            error_msg = f"Error updating channel context after waiting: {e}"
+            log_error(error_msg)
+            # Force error logs regardless of verbose setting
+            await send_to_log_channel(f"❌ **Wait Error**\n{error_msg}", force=True)
 
         # Process the message and generate a response
         try:
@@ -1053,10 +1153,12 @@ async def on_ready():
     global log_channel
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     bot.uptime = time.time()
+    
     if log_channel:
         # Startup message includes DEFAULT_NAME in parentheses.
         await log_channel.send(f"Claude's Mask ({DEFAULT_NAME}) is online!")
         await log_channel.send("Loading user data...")
+        
     try:
         await load_user_data()
         if log_channel:
@@ -1064,6 +1166,7 @@ async def on_ready():
     except Exception as e:
         if log_channel:
             await log_channel.send(f"Error loading user data: {e}")
+    
     log_info("Claude's Mask is online!")
 
     synced = await bot.tree.sync()
@@ -1077,6 +1180,35 @@ async def on_ready():
                 await member.edit(nick=f"{DEFAULT_NAME}")
             except Exception as e:
                 log_error(f"Failed to update nickname in guild {guild.id}: {e}")
+    
+    # Send admin commands reference to log channel
+    if log_channel:
+        command_reference = (
+            f"**📋 {DEFAULT_NAME} Admin Command Reference**\n\n"
+            "**Bot Control Commands:**\n"
+            f"`shutdown? {DEFAULT_NAME}` - Safely shut down the bot\n"
+            "`verbose on` - Enable detailed logging to this channel\n"
+            "`verbose off` - Disable detailed logging to this channel\n"
+            "`verbose` - Toggle verbose logging on/off\n"
+            "`status` - Show current bot status and settings\n"
+            "`testlog` - Test log channel functionality\n\n"
+            
+            "**User Management Commands:**\n"
+            "`user data? [user_id]` - Show data for a specific user\n"
+            "`premium [user_id]` - Toggle premium status for a user\n"
+            "`list users` - List all users with basic stats\n\n"
+            
+            "**Debug Commands:**\n"
+            "`!synccommands` - Manually sync slash commands (admin only)\n\n"
+            
+            f"**Logging Features:**\n"
+            "• Entity detection logs - Track multi-bot conversation coordination\n"
+            "• Voting logs - See why the bot decides to reply or not\n"
+            "• API call logs - Monitor token usage and response times\n\n"
+            
+            "Use `verbose on` to see detailed logs about entity detection, voting, and other features."
+        )
+        await log_channel.send(command_reference)
 
     heartbeat_check.start()
     periodic_save.start()
