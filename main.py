@@ -774,25 +774,29 @@ async def process_message(message: discord.Message):
                 
                 # Log detection results - respect VERBOSE_LOGGING
                 await send_to_log_channel(detection_result)
-                
+
+                # Calculate wait time based on message source - simplified approach
                 if references_others_first and first_entity:
                     entity_list = ', '.join(all_entities)
+
+                    # Simple wait time calculation based on message source
+                    if message.author.bot:
+                        # For bot messages: use full MAX_TYPING_TIME
+                        # This ensures bot B waits long enough to see bot A's response
+                        wait_time = MAX_TYPING_TIME
+                    else:
+                        # For human messages: use 1/4 of MAX_TYPING_TIME
+                        # Humans typically respond faster than bots "think"
+                        wait_time = MAX_TYPING_TIME / 4
+
+                    # Add small randomness to prevent bots waiting exactly the same time
+                    variance = random.uniform(0.9, 1.1)  # ±10% variance
+                    wait_time = wait_time * variance
+
                     wait_reason = f"Entities detected: {entity_list}, waiting for {first_entity}"
                     log_info(wait_reason)
-                    
-                    # Calculate wait time based on message length + randomness
-                    # Base wait time: 3 seconds + 0.5 seconds per 20 characters
-                    base_wait = 3.0 + (len(content) / 40)
-                    
-                    # Add randomness to prevent bots waiting the same time
-                    variance = random.uniform(0.8, 1.2)
-                    wait_time = base_wait * variance
-                    
-                    # Ensure reasonable bounds: 3-12 seconds
-                    wait_time = min(max(wait_time, 3.0), 12.0)
-                    
                     should_wait = True
-                    
+
                     # Log the waiting decision - respect VERBOSE_LOGGING
                     wait_decision = (
                         f"⏱️ **Entity Wait Decision**\n"
@@ -800,7 +804,8 @@ async def process_message(message: discord.Message):
                         f"Will wait: Yes\n"
                         f"Wait reason: {wait_reason}\n"
                         f"Wait time: {wait_time:.2f}s\n"
-                        f"Base wait: {base_wait:.2f}s\n"
+                        f"Message source: {'Bot' if message.author.bot else 'Human'}\n"
+                        f"MAX_TYPING_TIME: {MAX_TYPING_TIME}s\n"
                         f"Variance applied: {variance:.2f}"
                     )
                     await send_to_log_channel(wait_decision)
