@@ -387,7 +387,7 @@ def setup_commands(bot: commands.Bot, user_data: dict):
     @bot.tree.command(name="help", description="Get help with bot commands.")
     async def help_command(interaction: discord.Interaction):
         commands_list = [
-            ("forget", "Reset your entire conversation history"),
+            ("reset_conversation", "Reset your entire conversation history"),
             ("forget_last", "Selectively forget recent messages"),
             ("remember", "Add a custom memory"),
             ("reroll", "Get a different response to your last message"),
