@@ -151,6 +151,160 @@ async def should_reply(message):
     abstain_votes = votes.count("abstain")
     return yes_votes > no_votes and yes_votes > abstain_votes
 
+async def detect_entities(message, bot_name, max_retries=2):
+    """
+    Robust entity detection using Claude with proper error handling and retry logic.
+    
+    Args:
+        message: The Discord message object
+        bot_name: The name of this bot
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        tuple: (references_others_first, first_entity, all_entities)
+    """
+    content = message.clean_content.strip()
+    
+    # Quick check - if message is too short, likely no complex entity references
+    if len(content) < 15:
+        return False, None, []
+    
+    # Normalize bot_name for comparison
+    normalized_bot_name = bot_name.lower().strip()
+    
+    # Create a focused prompt for entity detection
+    prompt = f"""Your task is to analyze the given message and identify entities (characters, bots, or users) 
+that are directly addressed or referenced. 
+
+I am a bot named "{bot_name}".
+
+INSTRUCTIONS:
+1. Only identify entities that are clearly being addressed or referenced
+2. Return ONLY a JSON array of strings representing the entities in order of appearance
+3. Use exactly the name as it appears in the message
+4. Do not include titles, honorifics, or descriptors unless they're part of the name
+5. If no entities are detected, return an empty JSON array: []
+6. DO NOT include any explanation or additional text, only the JSON array
+
+Example valid responses:
+[]
+["Alice"]
+["Bob", "Alice", "{bot_name}"]
+
+ONLY RETURN THE JSON ARRAY, NO OTHER TEXT."""
+
+    dummy_user_dict = {
+        "entity_detection": {
+            "token_usage": 0,
+            "premium": False,
+            "conversation_history": [
+                {"role": "user", "content": "system message for entity detection."}
+            ]
+        }
+    }
+
+    # Try with retries
+    for attempt in range(max_retries + 1):
+        try:
+            # Call Claude with a timeout
+            response = await asyncio.wait_for(
+                call_claude(
+                    user_id="entity_detection",
+                    user_dict=dummy_user_dict,
+                    model="claude-3-5-haiku-20241022",
+                    system_prompt=prompt,
+                    user_content=content,
+                    temperature=0.1,  # Very low temperature for consistency
+                    max_tokens=50,
+                    verbose=False
+                ),
+                timeout=3.0  # 3-second timeout to prevent blocking
+            )
+            
+            response_text = response.choices[0].message["content"].strip()
+            
+            # Try to parse the response as JSON
+            try:
+                # Look for the first [ and last ] to extract just the JSON array
+                start_idx = response_text.find('[')
+                end_idx = response_text.rfind(']')
+                
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    json_text = response_text[start_idx:end_idx+1]
+                    entities = json.loads(json_text)
+                    
+                    # Validate that we got a list
+                    if not isinstance(entities, list):
+                        log_error(f"Entity detection returned non-list: {type(entities)}")
+                        entities = []
+                    
+                    # Validate each entity is a string
+                    entities = [str(e) for e in entities if e]
+                    
+                    break  # Successfully parsed, exit retry loop
+                else:
+                    # No valid JSON found, try again or use empty list
+                    log_error(f"No JSON array found in response: {response_text}")
+                    entities = []
+                    
+                    # If it's the last attempt, use empty list
+                    if attempt == max_retries:
+                        break
+                    continue  # Try again
+                    
+            except json.JSONDecodeError as e:
+                log_error(f"Failed to parse JSON in attempt {attempt+1}: {e}")
+                entities = []
+                
+                # If it's the last attempt, use empty list
+                if attempt == max_retries:
+                    break
+                continue  # Try again
+                
+        except asyncio.TimeoutError:
+            log_error(f"Entity detection timed out on attempt {attempt+1}")
+            # If all retries failed, use empty list
+            if attempt == max_retries:
+                entities = []
+                break
+            continue  # Try again
+            
+        except Exception as e:
+            log_error(f"Error in entity detection attempt {attempt+1}: {e}")
+            # If all retries failed, use empty list
+            if attempt == max_retries:
+                entities = []
+                break
+            continue  # Try again
+    
+    # If all retries failed or entities is still not defined
+    if 'entities' not in locals():
+        entities = []
+    
+    # Default return values
+    references_others_first = False
+    first_entity = None
+    
+    # Normalize entities for better matching
+    normalized_entities = [e.lower().strip() for e in entities]
+    
+    # Check if any entities were detected
+    if entities:
+        # Check if bot is in the list
+        if normalized_bot_name in normalized_entities:
+            bot_position = normalized_entities.index(normalized_bot_name)
+            
+            # If bot is mentioned but not first
+            if bot_position > 0:
+                references_others_first = True
+                first_entity = entities[0]  # Use the original case of the entity
+        elif entities:  # Bot not mentioned but other entities are
+            references_others_first = True
+            first_entity = entities[0]
+    
+    return references_others_first, first_entity, entities
+
+
 user_data = {}
 USER_DATA_FILE = "user_info.pickle"
 
@@ -342,6 +496,95 @@ async def process_message(message: discord.Message):
                 if count >= BOT_REPLY_THRESHOLD:
                     return  # Skip if we've replied too many times to this bot
                 bot_reply_counts[message.author.id] = count + 1
+        
+        # Entity detection and waiting logic
+        should_wait = False
+        wait_time = 0
+        wait_reason = ""
+        
+        # Only do entity detection for non-DM channels and substantive messages
+        if not isinstance(message.channel, discord.DMChannel) and len(content) > 15:
+            try:
+                # Set a timeout for the entire entity detection process
+                references_others_first, first_entity, all_entities = await asyncio.wait_for(
+                    detect_entities(message, DEFAULT_NAME),
+                    timeout=4.0  # 4-second timeout for the entire detection process
+                )
+                
+                if references_others_first and first_entity:
+                    entity_list = ', '.join(all_entities)
+                    wait_reason = f"Entities detected: {entity_list}, waiting for {first_entity}"
+                    log_info(wait_reason)
+                    
+                    # Calculate wait time based on message length + randomness
+                    # Base wait time: 3 seconds + 0.5 seconds per 20 characters
+                    base_wait = 3.0 + (len(content) / 40)
+                    
+                    # Add randomness to prevent bots waiting the same time
+                    variance = random.uniform(0.8, 1.2)
+                    wait_time = base_wait * variance
+                    
+                    # Ensure reasonable bounds: 3-12 seconds
+                    wait_time = min(max(wait_time, 3.0), 12.0)
+                    
+                    should_wait = True
+            except asyncio.TimeoutError:
+                log_error("Entity detection timed out, continuing without waiting")
+            except Exception as e:
+                log_error(f"Error in entity detection: {e}")
+                # Continue with processing even if entity detection fails
+        
+        # If we should wait for another entity to respond
+        if should_wait and wait_time > 0:
+            log_info(f"Waiting {wait_time:.2f}s because: {wait_reason}")
+            
+            # Keep typing indicator active during wait (makes delay appear natural)
+            typing_task = None
+            if not isinstance(message.channel, discord.DMChannel):
+                typing_task = asyncio.create_task(
+                    extended_typing(message.channel, wait_time)
+                )
+            
+            # Wait for the calculated time
+            await asyncio.sleep(wait_time)
+            
+            # Cancel typing task if it's still running
+            if typing_task and not typing_task.done():
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+            
+            # After waiting, update the channel context with any new messages
+            if hasattr(message.channel, 'id') and message.channel.id in channel_context:
+                try:
+                    # Collect new messages that arrived during our wait
+                    recent_messages = []
+                    async for msg in message.channel.history(limit=5):
+                        # Only include messages that:
+                        # 1. Aren't the original message we're responding to
+                        # 2. Were created after the original message
+                        # 3. Aren't from this bot
+                        if (msg.id != message.id and 
+                            msg.created_at > message.created_at and
+                            msg.author.id != bot.user.id):
+                            
+                            clean_content = msg.clean_content.strip()
+                            if clean_content:
+                                recent_messages.append({
+                                    "author": msg.author.name,
+                                    "content": clean_content
+                                })
+                    
+                    # Add new messages to the context
+                    if recent_messages:
+                        channel_context[message.channel.id].extend(recent_messages)
+                        # Keep within limit
+                        channel_context[message.channel.id] = channel_context[message.channel.id][-10:]
+                        log_info(f"Updated channel context with {len(recent_messages)} new messages after waiting")
+                except Exception as e:
+                    log_error(f"Error updating channel context after waiting: {e}")
 
         # Process the message and generate a response
         try:
