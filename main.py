@@ -61,105 +61,178 @@ bot_reply_lock = asyncio.Lock()
 # Key: channel ID, Value: list of messages (each as a dict with author and content)
 channel_context = {}
 
+# Add this to your config.py or directly in main.py as a global setting
+FORCE_VOTE_LOGGING = True  # This will ensure vote logs are sent regardless of verbose setting
+
 async def get_yes_no_votes(message, is_bot=False, vote_count=3):
     """
-    Ask Claude-3-5-haiku for multiple yes/no votes.
-    Returns a list of votes, each as "yes", "no", or "abstain".
+    Ask Claude-3-5-haiku for multiple yes/no votes with recent conversation context.
+    Uses an extremely strict prompt to ensure only yes/no responses.
     """
-    bot_name = DEFAULT_NAME  # from config
-    penalty_text = ""
+    bot_name = DEFAULT_NAME
     author_name = message.author.name
     channel_name = getattr(message.channel, 'name', 'DM')
     guild_name = getattr(message.guild, 'name', 'DM') if message.guild else 'DM'
     
-    # Create channel context for logging
-    channel_context_str = f"in #{channel_name}" if not isinstance(message.channel, discord.DMChannel) else "in DM"
+    # Get channel context
+    channel_ctx = f"in #{channel_name}" if not isinstance(message.channel, discord.DMChannel) else "in DM"
     if hasattr(message.guild, 'name') and message.guild:
-        channel_context_str += f" ({guild_name})"
+        channel_ctx += f" ({guild_name})"
     
+    # Penalty for bot messages
+    penalty = ""
     if is_bot:
         async with bot_reply_lock:
             count = bot_reply_counts.get(message.author.id, 0)
-        penalty_text = f" Note: this message is from a bot and you have already received {count} replies from me."
+        penalty = f" This message is from a bot and I've already replied {count} times to this bot."
     
-    # Create a more detailed prompt
+    # Fetch recent conversation context
+    recent_context = ""
+    try:
+        # Get recent messages
+        recent_messages = []
+        async for msg in message.channel.history(limit=10):
+            if msg.id != message.id:
+                recent_messages.append(msg)
+        
+        # Reverse to get chronological order
+        recent_messages.reverse()
+        
+        # Get last 2 messages from this user and last message from bot
+        user_msgs = []
+        bot_msg = None
+        
+        for msg in recent_messages:
+            if msg.author.id == message.author.id and len(user_msgs) < 2:
+                user_msgs.append(msg)
+            elif msg.author.id == bot.user.id and bot_msg is None:
+                bot_msg = msg
+            
+            if len(user_msgs) >= 2 and bot_msg is not None:
+                break
+                
+        # Build context
+        ctx_lines = []
+        
+        if user_msgs:
+            ctx_lines.append(f"Recent messages from {author_name}:")
+            for i, msg in enumerate(user_msgs):
+                ctx_lines.append(f"[{i+1}] {author_name}: {msg.clean_content}")
+                
+        if bot_msg:
+            ctx_lines.append(f"\nMy most recent response:")
+            ctx_lines.append(f"{bot_name}: {bot_msg.clean_content}")
+            
+        if ctx_lines:
+            recent_context = "\n".join(ctx_lines)
+            
+    except Exception as e:
+        log_error(f"Error fetching conversation context: {e}")
+    
+    # Extremely strict prompt focused on binary yes/no
     prompt = (
-        f"You are {bot_name}. Please respond with a simple yes/no: would you like to reply to this message from "
-        f"{author_name} {channel_context_str}? Consider if the message seems to be directed at you or if "
-        f"it would be natural for you to respond in this conversation.{penalty_text} "
-        f"Respond with ONLY 'yes' or 'no'."
+        f"INSTRUCTIONS: You are {bot_name}. You will answer ONLY with the word 'yes' or the word 'no' - no other text.\n\n"
+        f"QUESTION: Should I ({bot_name}) reply to this message from {author_name} {channel_ctx}?\n\n"
+    )
+    
+    # Add context if available
+    if recent_context:
+        prompt += f"Conversation context:\n{recent_context}\n\n"
+        
+    prompt += (
+        f"Current message from {author_name}:\n"
+        f"{message.clean_content}\n\n"
+        f"{penalty}\n\n"
+        f"IMPORTANT: Your entire response must be ONLY the word 'yes' OR the word 'no'. "
+        f"Do not include ANY other text, punctuation, or explanation."
     )
 
     # Log that we're starting voting
-    log_info(f"Starting vote for message from {author_name} {channel_context_str}: '{message.clean_content[:50]}...'")
+    log_info(f"Starting vote for: '{message.clean_content[:50]}...'")
+    
+    # Direct log channel message
+    if log_channel and FORCE_VOTE_LOGGING:
+        try:
+            vote_start_msg = (
+                f"📊 **Voting on message from {author_name}**\n"
+                f"```{message.clean_content[:150]}```"
+            )
+            if recent_context:
+                vote_start_msg += f"\n**Context:**```{recent_context[:200]}...```"
+                
+            await log_channel.send(vote_start_msg)
+        except Exception as e:
+            log_error(f"Failed to send vote start to log channel: {e}")
     
     votes = []
+    vote_details = []
+    
+    # Dummy user dict for API call
     dummy_user_dict = {
         "system_vote": {
             "token_usage": 0,
             "premium": False,
-            "conversation_history": [
-                {"role": "user", "content": "dummy conversation message to satisfy API requirements."}
-            ]
+            "conversation_history": [{"role": "user", "content": "system message"}]
         }
     }
 
     for i in range(vote_count):
         try:
             response = await call_claude(
-                user_id="system_vote",          # system-level; not tied to a persistent user
-                user_dict=dummy_user_dict,       # dummy conversation history
+                user_id="system_vote",
+                user_dict=dummy_user_dict,
                 model="claude-3-5-haiku-20241022",
                 system_prompt=prompt,
-                user_content=message.clean_content,  # pass the message as a user message
+                user_content="",  # Content is in the system prompt
                 temperature=1.0,
                 max_tokens=5,
                 verbose=False
             )
-            vote_raw = response.choices[0].message["content"].strip().lower()
             
-            # Log the raw vote
+            vote_raw = response.choices[0].message["content"].strip().lower()
             log_info(f"Vote {i+1} raw response: '{vote_raw}'")
             
-            if "yes" in vote_raw:
+            # Be very strict in parsing - only accept exact "yes" or "no"
+            if vote_raw == "yes":
                 votes.append("yes")
-            elif "no" in vote_raw:
+                vote_details.append(f"Vote {i+1}: YES")
+            elif vote_raw == "no":
                 votes.append("no")
+                vote_details.append(f"Vote {i+1}: NO")
             else:
                 votes.append("abstain")
+                vote_details.append(f"Vote {i+1}: ABSTAIN (invalid: '{vote_raw}')")
                 
         except Exception as e:
             log_error(f"Error in vote {i+1}: {e}")
-            votes.append("abstain")  # Count errors as abstentions
+            votes.append("abstain")
+            vote_details.append(f"Vote {i+1}: ABSTAIN (error)")
 
-    # Log the voting results
-    yes_votes = votes.count("yes")
-    no_votes = votes.count("no")
-    abstain_votes = votes.count("abstain")
+    # Count votes
+    yes_count = votes.count("yes")
+    no_count = votes.count("no")
+    abstain_count = votes.count("abstain")
     
-    final_decision = yes_votes > no_votes and yes_votes > abstain_votes
+    # Final decision
+    reply = yes_count > no_count and yes_count > abstain_count
     
-    log_result = (
-        f"Voting results for message from {author_name} {channel_context_str}: "
-        f"Yes: {yes_votes}, No: {no_votes}, Abstain: {abstain_votes}, "
-        f"Decision: {'REPLY' if final_decision else 'IGNORE'}"
+    # Console log
+    log_info(
+        f"Vote results: Yes={yes_count}, No={no_count}, Abstain={abstain_count}, "
+        f"Decision={'REPLY' if reply else 'IGNORE'}"
     )
     
-    log_info(log_result)
-    
-    # If VERBOSE_LOGGING is enabled, send this to the log channel
-    if VERBOSE_LOGGING and log_channel:
+    # Log channel result
+    if log_channel and FORCE_VOTE_LOGGING:
         try:
-            # Truncate the message if it's too long
-            truncated_msg = message.clean_content[:200] + "..." if len(message.clean_content) > 200 else message.clean_content
-            channel_msg = (
+            result_msg = (
                 f"📊 **Vote Results**\n"
-                f"Message from: {author_name} {channel_context_str}\n"
-                f"Message: `{truncated_msg}`\n"
-                f"Votes: Yes: {yes_votes}, No: {no_votes}, Abstain: {abstain_votes}\n"
-                f"Decision: {'✅ REPLY' if final_decision else '❌ IGNORE'}"
+                f"Message from: {author_name} {channel_ctx}\n"
+                f"Results: Yes={yes_count}, No={no_count}, Abstain={abstain_count}\n"
+                f"{chr(10).join(vote_details)}\n"
+                f"**Decision: {'✅ REPLY' if reply else '❌ IGNORE'}**"
             )
-            await log_channel.send(channel_msg)
+            await log_channel.send(result_msg)
         except Exception as e:
             log_error(f"Failed to send vote results to log channel: {e}")
     
@@ -431,6 +504,42 @@ def calculate_typing_time(response_text):
         
     return typing_time
 
+# Helper function to safely send to log channel
+async def send_to_log_channel(message, level="INFO", force=False):
+    """
+    Sends a message to the log channel, with error handling
+    
+    Args:
+        message: The message to send
+        level: Log level string
+        force: Whether to force sending regardless of VERBOSE_LOGGING
+    """
+    global log_channel
+    
+    # Skip if log_channel is not available
+    if log_channel is None:
+        log_error("Cannot send to log channel: log_channel is None")
+        return
+        
+    # Check if we should log (respecting VERBOSE_LOGGING setting)
+    should_log = force
+    
+    try:
+        # Try to access VERBOSE_LOGGING, but don't crash if not defined
+        import config
+        should_log = should_log or getattr(config, 'VERBOSE_LOGGING', False)
+    except (ImportError, AttributeError):
+        # If we can't access config or VERBOSE_LOGGING, force log if requested
+        pass
+        
+    if should_log:
+        try:
+            # Try to send the message to the log channel
+            await log_channel.send(message)
+        except Exception as e:
+            # Log the error to console
+            log_error(f"Failed to send message to log channel: {e}")
+
 # admin command processing
 async def process_admin_commands(message: discord.Message):
     """
@@ -554,6 +663,14 @@ async def process_admin_commands(message: discord.Message):
             f"• Uptime: {(time.time() - bot.uptime) if hasattr(bot, 'uptime') else 'Unknown':.1f}s"
         )
         await log_channel.send(status_text)
+
+    # Add this to your process_admin_commands function
+    elif cmd == "testlog":
+        test_message = "This is a test log message to verify log channel functionality."
+        await log_channel.send(f"📋 **Test Log:** {test_message}")
+        await send_to_log_channel("Forced test log message from admin command", force=True)
+        log_info("Test log message sent")
+        return
         
 
 # message processing as separate async function
@@ -919,6 +1036,7 @@ async def before_heartbeat():
 async def on_ready():
     global log_channel
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    bot.uptime = time.time()
     if log_channel:
         # Startup message includes DEFAULT_NAME in parentheses.
         await log_channel.send(f"Claude's Mask ({DEFAULT_NAME}) is online!")
