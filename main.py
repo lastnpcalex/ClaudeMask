@@ -61,14 +61,15 @@ bot_reply_lock = asyncio.Lock()
 # Key: channel ID, Value: list of messages (each as a dict with author and content)
 channel_context = {}
 
-# Add this to your config.py or directly in main.py as a global setting
-FORCE_VOTE_LOGGING = True  # This will ensure vote logs are sent regardless of verbose setting
-
 async def get_yes_no_votes(message, is_bot=False, vote_count=3):
     """
     Ask Claude-3-5-haiku for multiple yes/no votes with recent conversation context.
     Uses an extremely strict prompt to ensure only yes/no responses.
+    Respects the VERBOSE_LOGGING setting from config.
     """
+    # Import at function level to ensure we get the current value
+    from config import VERBOSE_LOGGING
+    
     bot_name = DEFAULT_NAME
     author_name = message.author.name
     channel_name = getattr(message.channel, 'name', 'DM')
@@ -147,11 +148,11 @@ async def get_yes_no_votes(message, is_bot=False, vote_count=3):
         f"Do not include ANY other text, punctuation, or explanation."
     )
 
-    # Log that we're starting voting
+    # Log that we're starting voting - always log to console
     log_info(f"Starting vote for: '{message.clean_content[:50]}...'")
     
-    # Direct log channel message
-    if log_channel and FORCE_VOTE_LOGGING:
+    # Only log to Discord channel if VERBOSE_LOGGING is enabled
+    if log_channel and VERBOSE_LOGGING:
         try:
             vote_start_msg = (
                 f"📊 **Voting on message from {author_name}**\n"
@@ -216,14 +217,14 @@ async def get_yes_no_votes(message, is_bot=False, vote_count=3):
     # Final decision
     reply = yes_count > no_count and yes_count > abstain_count
     
-    # Console log
+    # Console log - always do this
     log_info(
         f"Vote results: Yes={yes_count}, No={no_count}, Abstain={abstain_count}, "
         f"Decision={'REPLY' if reply else 'IGNORE'}"
     )
     
-    # Log channel result
-    if log_channel and FORCE_VOTE_LOGGING:
+    # Log channel result - only if verbose logging enabled
+    if log_channel and VERBOSE_LOGGING:
         try:
             result_msg = (
                 f"📊 **Vote Results**\n"
@@ -632,22 +633,37 @@ async def process_admin_commands(message: discord.Message):
         return
 
     # Add toggle for verbose logging
-    elif cmd == "verbose" and len(split) > 1:
-        toggle = split[1].lower()
-        if toggle in ["on", "true", "1", "enable", "yes"]:
-            # We need to modify the global VERBOSE_LOGGING
-            import config
-            config.VERBOSE_LOGGING = True
-            await log_channel.send(f"Verbose logging has been **enabled**. Terminal logs will now be sent to this channel.")
-            log_info("Verbose logging enabled by admin command")
-        elif toggle in ["off", "false", "0", "disable", "no"]:
-            import config
-            config.VERBOSE_LOGGING = False
-            await log_channel.send(f"Verbose logging has been **disabled**. Terminal logs will no longer be sent to this channel.")
-            log_info("Verbose logging disabled by admin command")
+    # Add toggle for verbose logging
+    elif cmd == "verbose":
+        from config import VERBOSE_LOGGING
+    
+        if len(split) > 1:
+            # User is setting a specific value
+            toggle = split[1].lower()
+            if toggle in ["on", "true", "1", "enable", "yes"]:
+                # Set to True
+                import config
+                config.VERBOSE_LOGGING = True
+                await log_channel.send(f"Verbose logging has been **enabled**. Vote logs and detailed information will now be sent to this channel.")
+                log_info("Verbose logging enabled by admin command")
+            elif toggle in ["off", "false", "0", "disable", "no"]:
+                # Set to False
+                import config
+                config.VERBOSE_LOGGING = False
+                await log_channel.send(f"Verbose logging has been **disabled**. Only essential information will be sent to this channel.")
+                log_info("Verbose logging disabled by admin command")
+            else:
+                # Invalid value
+                await log_channel.send(f"Invalid verbose logging setting. Use: `verbose [on|off]` or just `verbose` to toggle.")
         else:
-            await log_channel.send(f"Invalid verbose logging setting. Use: verbose [on|off]")
-        
+            # No value specified, toggle current setting
+            import config
+            current_value = getattr(config, 'VERBOSE_LOGGING', False)
+            config.VERBOSE_LOGGING = not current_value
+            new_state = "enabled" if config.VERBOSE_LOGGING else "disabled"
+            await log_channel.send(f"Verbose logging has been **{new_state}** (toggled from previous state).")
+            log_info(f"Verbose logging {new_state} by admin toggle command")       
+ 
     # Add status command to check current settings
     elif cmd == "status":
         import config
