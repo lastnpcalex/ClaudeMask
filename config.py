@@ -30,7 +30,7 @@ TYPING_SPEED_CPM = int(os.environ.get("typing_speed_cpm", "250"))  # Characters 
 MIN_TYPING_TIME = float(os.environ.get("min_typing_time", "2.0"))  # Minimum seconds
 MAX_TYPING_TIME = float(os.environ.get("max_typing_time", "60.0"))  # Maximum seconds
 TYPING_VARIANCE = float(os.environ.get("typing_variance", "0.2"))  # ±20% random variance
-REPLY_COOLDOWN = float(os.environ.get("typing_variance", "10.0")) # 10.0 s reply cooldonw for bots
+REPLY_COOLDOWN = float(os.environ.get("reply_cooldown", "10.0")) # 10.0 s reply cooldonw for bots
 
 # Character configuration
 DEFAULT_NAME = os.environ.get("default_name", "Assistant")
