@@ -47,7 +47,7 @@ async def maybe_summarize_conversation(
     conversation_text = "\n".join(f"{msg['role'].upper()}: {msg['content']}" for msg in conversation)
     estimated_conv_tokens = estimate_tokens(conversation_text)
 
-    # If the estimated token count of the conversation is less than 7,500, do nothing.
+    # If the estimated token count of the conversation is less than 25,000, do nothing.
     if estimated_conv_tokens < 25000:
         return
 
